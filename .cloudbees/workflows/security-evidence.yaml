@@ -1,0 +1,59 @@
+apiVersion: automation.cloudbees.io/v1alpha1
+kind: workflow
+name: security-evidence
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+jobs:
+  evidence:
+    steps:
+      - name: Count open CodeQL and Dependabot alerts
+        id: counts
+        uses: docker://alpine:3.19  # literal required
+        shell: sh
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: anuddeeph2/sp-evidence-demo
+        run: |
+          apk add --no-cache curl jq >/dev/null
+          # token goes through a 0600 curl config file, not process arguments
+          CFG="$(mktemp)"; chmod 600 "$CFG"
+          printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN" > "$CFG"
+          printf 'header = "Accept: application/vnd.github+json"\n' >> "$CFG"
+
+          fetch() {  # $1 = API path, $2 = jq expression, $3 = output name
+            CODE="$(curl -sS -K "$CFG" -o body.json -w '%{http_code}' "https://api.github.com/repos/$REPO/$1?state=open&per_page=100")"
+            if [ "$CODE" = "200" ]; then
+              for SEV in critical high medium low; do
+                N="$(jq --arg s "$SEV" "[ .[] | select($2 == \$s) ] | length" body.json)"
+                printf '%s' "$N" > "$CLOUDBEES_OUTPUTS/$3_$SEV"
+              done
+              printf '%s' "$(jq 'length' body.json)" > "$CLOUDBEES_OUTPUTS/$3_total"
+              printf 'ok' > "$CLOUDBEES_OUTPUTS/$3_status"
+            else
+              echo "$3: GitHub API returned HTTP $CODE" >&2
+              for SEV in critical high medium low total; do printf 'n/a' > "$CLOUDBEES_OUTPUTS/$3_$SEV"; done
+              printf 'HTTP %s' "$CODE" > "$CLOUDBEES_OUTPUTS/$3_status"
+            fi
+          }
+          fetch code-scanning/alerts '(.rule.security_severity_level // "none")' codeql
+          fetch dependabot/alerts '.security_advisory.severity' dependabot
+          rm -f "$CFG" body.json
+
+      - name: Publish security evidence
+        uses: cloudbees-io/publish-evidence-item@v1
+        with:
+          content: |-
+            ## Security evidence (CodeQL and Dependabot)
+            Repository: [anuddeeph2/sp-evidence-demo](https://github.com/anuddeeph2/sp-evidence-demo/security) | Run: ${{ cloudbees.run_id }}
+
+            | Scanner | API status | Critical | High | Medium | Low | Total open |
+            |---------|------------|----------|------|--------|-----|------------|
+            | CodeQL | ${{ steps.counts.outputs.codeql_status }} | ${{ steps.counts.outputs.codeql_critical }} | ${{ steps.counts.outputs.codeql_high }} | ${{ steps.counts.outputs.codeql_medium }} | ${{ steps.counts.outputs.codeql_low }} | ${{ steps.counts.outputs.codeql_total }} |
+            | Dependabot | ${{ steps.counts.outputs.dependabot_status }} | ${{ steps.counts.outputs.dependabot_critical }} | ${{ steps.counts.outputs.dependabot_high }} | ${{ steps.counts.outputs.dependabot_medium }} | ${{ steps.counts.outputs.dependabot_low }} | ${{ steps.counts.outputs.dependabot_total }} |
+
+            Counts are open alerts read from the GitHub REST API at run time. Alert details stay in the GitHub Security tab.

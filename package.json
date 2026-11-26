@@ -1,0 +1,12 @@
+{
+  "name": "sp-evidence-demo",
+  "version": "1.0.0",
+  "description": "Fictional demo app used to test CodeQL and Dependabot evidence in CloudBees Unify. Contains intentionally outdated dependencies and an intentionally unsafe pattern. Do not use.",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "express": "4.17.1",
+    "lodash": "4.17.15",
+    "minimist": "1.2.5"
+  }
+}
